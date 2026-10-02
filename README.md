@@ -1,0 +1,261 @@
+# macOS Login & Responsiveness Optimization
+
+A single self-contained script that fixes the **slow, unresponsive login screen**
+caused by aggressive hibernation, and trims a set of macOS defaults that make the
+UI feel sluggish.
+
+Developed and tested on macOS 27.0.1 (26A434), Apple M2 Max (`Mac14,6`). It sticks
+to `bash 3.2` syntax (what `/bin/bash` still is on macOS) and to `pmset`,
+`defaults` and `launchctl` invocations that have been stable for many releases,
+but **it has only actually been run on 27.0.1** — please open an issue if
+something misbehaves on your version.
+
+```
+git clone https://github.com/wasim-osman/macos-optimization.git
+cd macos-optimization
+./macos-optimization.command --dry-run     # see what it would change
+./macos-optimization.command               # apply
+./macos-optimization.command --undo        # changed your mind
+```
+
+---
+
+## Why the login screen hangs
+
+On a Mac with a lot of RAM, macOS's default `hibernatemode 3` writes the **entire
+contents of RAM to disk** every time the machine sleeps. On a 32 GB or 64 GB
+machine that is a multi-gigabyte write. If the machine is woken part-way through
+that write — which is exactly what happens when you close and reopen the lid, or
+walk away from a desk — the restore has to replay the disk image before the
+window server comes back.
+
+The visible symptom is the login window appearing frozen for several seconds to
+several minutes after a password is typed.
+
+Disabling hibernation removes that write entirely. The cost is that you lose
+"resume exactly where I was left off" across a full power loss, and that Fast
+Sleep is gone (see [Laptops](#laptops-read-this-first)).
+
+Everything else in the script is optional and independent of that fix — pick and
+choose by running it, watching what it reports, and undoing anything you dislike.
+
+---
+
+## Requirements and permissions
+
+This is the part people usually get stuck on, so it is spelled out.
+
+| What you need | Why | Required? |
+| --- | --- | --- |
+| **An administrator account** | `pmset` changes live power state and is a root-only tool. The script calls `sudo` and prompts you. | **Yes** |
+| **The executable bit** (`chmod +x`) | macOS only runs a `.command` file if it is executable. Git preserves this bit, so a normal `git clone` needs nothing extra. | **Yes** |
+| **Terminal.app** | `.command` files are run by Terminal. Any terminal emulator works if you invoke it from a shell. | Yes |
+| **Password entry at the prompt** | Only for the five `pmset` lines and the `rm` of the sleep image. Everything else runs unprivileged. | Yes |
+
+### What you do *not* need
+
+- **No Full Disk Access.** Nothing here reads or writes a protected folder
+  except `/var/vm/sleepimage`, which `sudo` handles on its own.
+- **No Accessibility, Automation or Screen Recording permission.** The script
+  never asks for them and will never trigger those prompts.
+- **No `sudo` for the whole script.** Do **not** run
+  `sudo ./macos-optimization.command` — the script refuses to run as root
+  (`error: Do not run this with sudo`) and prompts you per-command instead, so
+  your admin password is only asked for where it is genuinely needed.
+
+### If macOS blocks it
+
+**Downloaded as a zip from the browser, or received via AirDrop / Messages:**
+those routes attach a `com.apple.quarantine` attribute, and Gatekeeper then
+refuses to run it. Clear it once:
+
+```bash
+xattr -dr com.apple.quarantine ~/Downloads/macos-optimization-main
+```
+
+**Cloned with `git` or `gh repo clone`:** no quarantine attribute is attached,
+so this does not apply. Cloning is the clean path.
+
+**`chmod +x` needed?** Only if you copy the file around with something that
+drops permissions, or extracted it with a tool that ignored the mode bits:
+
+```bash
+chmod +x macos-optimization.command restore-defaults.command
+```
+
+**macOS asks Terminal for permission to access a folder** the first time a
+script reaches outside your home directory (for example when removing
+`/var/vm/sleepimage`). Choose **OK** / **Allow**. If you dismissed it by
+accident, re-enable it under **System Settings → Privacy & Security → Files and
+Folders → Terminal**.
+
+---
+
+## Usage
+
+| Command | Effect |
+| --- | --- |
+| `./macos-optimization.command --dry-run` | Prints every change, touches nothing, never asks for a password. Safe on any Mac. |
+| `./macos-optimization.command` | Shows the confirmation prompt, then applies. |
+| `./macos-optimization.command -y` | Same, without the prompt. For scripting. |
+| `./macos-optimization.command --undo` | Restores the exact state captured by the first apply. |
+| `./macos-optimization.command --help` | Usage summary. |
+| `./restore-defaults.command` | Standalone double-clickable alias for `--undo`. |
+
+### Add it to the Dock
+
+Drag `macos-optimization.command` onto the Dock. macOS adds it as a
+terminal-launcher tile; clicking it opens a Terminal window and runs the script.
+Keep `restore-defaults.command` next to it and drag that in too, so the undo is
+one click away.
+
+### Put it in a folder
+
+If you would rather keep it in a folder than on the Dock, drop both `.command`
+files into `~/Applications` (create it if it does not exist) and double-click
+from Finder.
+
+---
+
+## What it changes
+
+`set -e` was replaced with per-command error handling in v2, because several of
+these keys **do not exist on every Mac**. On a desktop with no proximity sensor,
+for example, `pmset -a proximitywake 0` fails — and under the original script
+that one line aborted everything after it. Now a rejected key is reported as
+skipped and the run continues.
+
+### Power settings
+
+| Setting | Change to | Effect |
+| --- | --- | --- |
+| `hibernatemode` | `0` | **The main fix.** No more RAM-to-disk write on sleep. |
+| `/var/vm/sleepimage` | deleted | Frees disk. Only exists while hibernation is on, so usually already absent. |
+| `standby` | `0` | Disables Fast Sleep (see laptops). |
+| `autopoweroff` | `0` | Disables the timer that sleeps an idle Mac after a while. |
+| `powernap` | `0` | Stops the Mac waking itself for background mail/Time Machine. |
+| `sleep` | `10` | Sleep after 10 minutes idle instead of the shorter default. |
+| `proximitywake` | `0` | Laptops only — disables waking on approach. Skipped on desktops. |
+
+### UI responsiveness
+
+| Setting | Change to | Effect |
+| --- | --- | --- |
+| `KeyRepeat` | `2` | Key repeat starts almost immediately. |
+| `InitialKeyRepeat` | `15` | Same, from a shorter delay. |
+| `NSWindowResizeTime` | `0.1` | Windows snap open instead of animating. |
+| `com.apple.dock autohide-delay` | `0.1` | Dock appears instantly. |
+| `com.apple.dock autohide-time-modifier` | `0.3` | Shorter Dock slide. |
+| `com.apple.dock mineffect` | `scale` | Replaces the "genie" effect with the cheap scale. |
+| `com.apple.finder DisableAllAnimations` | `true` | No Finder window animation. |
+
+### Background processes
+
+| Setting | Change to | What you lose |
+| --- | --- | --- |
+| Siri + `com.apple.Siri.agent` | disabled | Siri, and the Siri menu bar icon. |
+| `com.apple.suggestd` | disabled | **Spotlight web/suggestion results.** Local app search still works. |
+| `com.apple.photoanalysisd` | disabled | Automatic "Photos" groupings and scene detection. Your library is untouched. |
+| `com.apple.iconservicesd` | disabled | Icon cache lookups. Can make newly created files show a generic icon until reboot. |
+| `CrashReporter DialogType` | `none` | Crash dialogs. Crashes are still logged to `/Library/Logs/DiagnosticReports`. |
+
+### Text substitutions
+
+`NSAutomaticSpellingCorrectionEnabled`, `NSAutomaticCapitalizationEnabled`,
+`NSAutomaticDashSubstitutionEnabled`, `NSAutomaticPeriodSubstitutionEnabled`,
+`NSAutomaticQuoteSubstitutionEnabled` — all set to `false`. Stops macOS from
+rewriting what you type: no smart quotes, no `--` becoming an en dash, no
+sentence capitalisation.
+
+> This one is a matter of taste rather than performance, and it is the setting
+> people most often want back. `--undo` restores all five.
+
+---
+
+## Laptops: read this first
+
+`standby 0` and `autopoweroff 0` disable **Fast Sleep** (S3). Without it, a
+closed MacBook does not park its memory and power down — it keeps running with
+the lid shut, drawing real power.
+
+That means a MacBook in a backpack can be **flat battery by lunchtime**, and heat
+builds in a bag. If you run this on a laptop, either:
+
+- apply it, verify login is fixed, then undo the two power lines
+  (`--undo` puts everything back, or just `sudo pmset -a standby 1 autopoweroff 1`),
+- or edit the script and comment out those two `run` lines before running.
+
+Everything else in the script is laptop-safe.
+
+---
+
+## Undoing
+
+`--undo` is not a guess. Before the first apply, the script writes the previous
+value of **every** setting it is about to touch to:
+
+```
+~/Library/Application Support/macos-optimization/state.tsv
+```
+
+`--undo` reads that file and puts each value back, including deleting keys that
+did not previously exist and re-enabling daemons it disabled. Re-running the
+apply later does not overwrite the original baseline — the second run writes a
+timestamped `state-<date>.tsv` alongside it and `--undo` keeps using the original,
+so you can never end up with a "default" that is actually your optimised state.
+
+If the backup file is missing, `--undo` falls back to the documented macOS
+defaults (`hibernatemode 3`, `standby 1`, `autopoweroff 1`, `powernap 1`,
+`sleep 1`, `proximitywake 1`) and deletes the `defaults` keys, which returns them
+to their factory state.
+
+### Note on macOS re-enabling services
+
+A macOS major upgrade often **re-enables** `suggestd` and `photoanalysisd` on its
+own. If Siri suggestions or photo groupings come back after an update, that is
+macOS, not a bug here. Re-run the script, or just the two `launchctl disable`
+lines.
+
+---
+
+## Files
+
+| File | What it is |
+| --- | --- |
+| `macos-optimization.command` | The script. Everything else defers to it. |
+| `restore-defaults.command` | Thin wrapper that calls `macos-optimization.command --undo`. Exists so the undo is a separate double-clickable file. |
+| [`macos_optimization.md`](macos_optimization.md) | The original notes this script was written from, kept for reference. |
+| `LICENSE` | MIT. |
+
+### About `macos_optimization.md`
+
+It is the hand-written source document — plain `bash` blocks grouped by topic,
+each one annotated with a comment explaining why. It is the readable version of
+what the script automates, and it is genuinely useful in two ways the script
+cannot cover:
+
+1. **Copy-paste individual commands.** If you only want one change — say, faster
+   key repeat, and nothing else — you can lift that single block out of the
+   markdown and paste it into Terminal. You do not have to run all 30 changes to
+   get one of them.
+2. **Audit before you trust.** It is short enough to read end to end in a couple
+   of minutes, so you can see every command before running anything, rather than
+   trusting a script you downloaded.
+
+The `.command` file is that document turned into something executable, with the
+confirmation prompt, the backup, and the undo added. The two are kept in the repo
+together on purpose: the markdown explains *why*, the script does *what*, and
+neither replaces the other.
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). In short: `--dry-run` must stay
+side-effect free, every new `defaults`/`pmset`/`launchctl` key needs a row in the
+README tables and an entry in `MANAGED_DEFAULTS`, and please open an issue with
+your macOS version and Mac model first — several keys are hardware-dependent.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

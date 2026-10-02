@@ -79,7 +79,7 @@ defaults write NSGlobalDomain NSAutomaticQuoteSubstitutionEnabled -bool false
 ## After Running Everything
 
 1. Restart your Mac
-2. Test login â€” unresponsiveness/sleep loop should be gone
+2. Test login — unresponsiveness/sleep loop should be gone
 
 ## Resetting to Defaults
 

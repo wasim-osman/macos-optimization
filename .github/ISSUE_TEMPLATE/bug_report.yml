@@ -1,0 +1,82 @@
+name: Bug report
+description: Something in the script did not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please run `./macos-optimization.command --dry-run` first and paste the
+        output. It shows every change the script would make, and touches nothing.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you run, and what did it do instead?
+      placeholder: "I ran ./macos-optimization.command --dry-run and it printed 'unknown option: -x'"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mac-model
+    attributes:
+      label: Mac model
+      description: "Run: sysctl -n hw.model"
+      options:
+        - A laptop (MacBook / MacBook Pro / MacBook Air)
+        - A desktop (Mac mini / iMac / Mac Studio / Mac Pro)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: hw-model
+    attributes:
+      label: Hardware identifier
+      description: "Output of sysctl -n hw.model, e.g. Mac14,6"
+      placeholder: Mac14,6
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: "Run: sw_vers -productVersion"
+      placeholder: "15.6"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: bash-version
+    attributes:
+      label: Shell version
+      description: "Run: bash --version"
+      options:
+        - "3.2 (default /bin/bash on macOS)"
+        - "5.x (Homebrew bash)"
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: full-output
+    attributes:
+      label: Full terminal output
+      description: Paste everything, including any lines marked "skipped".
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I ran `--dry-run` and the problem still happens in that mode
+          required: false
+        - label: I ran `--undo` and the setting did not return to its previous value
+          required: false
