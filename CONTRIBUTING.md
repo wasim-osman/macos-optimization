@@ -20,7 +20,7 @@ before writing code, so nobody discovers the problem on their own machine.
 1. **`--dry-run` never modifies anything and never prompts for a password.**
    The only exception allowed is creating the empty state directory. If your
    change touches anything, it belongs behind `run()`, which already handles the
-   dry-run branch.
+   dry-run branch. `capture_state()` returns early on dry-run for the same reason.
 2. **`--undo` must be able to reverse your change.** Any new `defaults`, `pmset`
    or `launchctl` key has to be added in three places, or undo will silently
    leave it behind:
@@ -41,27 +41,53 @@ before writing code, so nobody discovers the problem on their own machine.
 
 ## Testing
 
-There is no test suite yet, which is itself a welcome contribution. Until there
-is one, please check at minimum:
-
 ```bash
-bash -n macos-optimization.command          # syntax
-./macos-optimization.command --dry-run      # no side effects, no password prompt
-./macos-optimization.command --help
+./tests/run-tests.sh          # everything
+./tests/run-tests.sh undo     # only tests whose name matches "undo"
 ```
 
-`--dry-run` is safe to run anywhere. The full apply is not — run it in a VM or on
-a machine you can undo, and always finish with:
+The suite replaces `pmset`, `defaults`, `launchctl`, `sudo` and `killall` with
+stubs on a temporary `PATH`, and points the script's backup at a temp directory
+via `MACOS_OPT_STATE_DIR`. The full apply → undo round trip therefore runs for
+real — it is not mocked at the script level — but **it cannot change your
+settings**, because nothing privileged is ever executed. It runs on every push
+and pull request on macOS 14 and macOS 15.
+
+`tests/helpers/stub-env.sh` builds the stub commands. The read-only ones
+(`pmset -g`, `defaults read`, `launchctl print-disabled`) answer from fixture
+files, which is how a test chooses the "previous state" the script will discover
+and back up. `STUB_FAIL_MATCH` makes matching commands exit non-zero, which is
+how the "a rejected key must not abort the run" tests work.
+
+Two tests worth knowing about because they have caught real bugs:
+
+- **the daemon parser tests** pin both the `=> disabled` spelling used by current
+  macOS and the older `=> true` spelling. Reading only one of them made every
+  daemon look enabled, so the baseline was wrong and `--undo` refused to
+  re-enable anything.
+- **the README consistency tests** extract `MANAGED_DEFAULTS`, `MANAGED_POWER`
+  and `MANAGED_DOMAINS` out of the script and require every key to appear in the
+  README, so a new setting that is not documented fails the build.
+
+If you add a `--flag`, add a test for the CLI contract (accepted value, rejected
+value, exit code) alongside the behaviour test.
+
+## Versioning
+
+`VERSION` in the script must match a released git tag. The suite fails if
+`VERSION="2.3.0"` has no `v2.3.0` tag, so after bumping the version:
 
 ```bash
-./macos-optimization.command --undo
+git commit -am "v2.3.0: ..."
+git tag -a v2.3.0 -m "v2.3.0"
+git push --follow-tags
+gh release create v2.3.0 --generate-notes
 ```
 
-The baseline backup lives in
-`~/Library/Application Support/macos-optimization/state.tsv`. `MACOS_OPT_STATE_DIR`
-overrides that path, which is what makes it possible to test capture and restore
-without touching real settings — please use it rather than writing to the real
-directory.
+Do not attach the `.command` files as release assets. Anything downloaded gets
+a `com.apple.quarantine` attribute from the browser, which then blocks
+double-clicking — the same problem the README's permissions section explains.
+Cloning the tag does not have that problem.
 
 ## Style
 

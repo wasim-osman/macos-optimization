@@ -1,2 +1,8 @@
 .DS_Store
 *.local
+
+# Runtime baseline written by macos-optimization.command. Lives in
+# ~/Library/Application Support, but ignore it here too in case someone points
+# MACOS_OPT_STATE_DIR at the repo while testing.
+state.tsv
+state-*.tsv

@@ -96,11 +96,34 @@ Folders → Terminal**.
 | Command | Effect |
 | --- | --- |
 | `./macos-optimization.command --dry-run` | Prints every change, touches nothing, never asks for a password. Safe on any Mac. |
-| `./macos-optimization.command` | Shows the confirmation prompt, then applies. |
-| `./macos-optimization.command -y` | Same, without the prompt. For scripting. |
-| `./macos-optimization.command --undo` | Restores the exact state captured by the first apply. |
+| `./macos-optimization.command` | Shows the confirmation prompt, then applies the **full** profile. |
+| `./macos-optimization.command --profile minimal` | Applies only the login-hang fix. See [Profiles](#profiles). |
+| `./macos-optimization.command --profile full` | The default. Everything below. |
+| `./macos-optimization.command -y` | No confirmation prompt. For scripting. |
+| `./macos-optimization.command --undo` | Restores the state captured before the first apply. |
 | `./macos-optimization.command --help` | Usage summary. |
 | `./restore-defaults.command` | Standalone double-clickable alias for `--undo`. |
+
+### Profiles
+
+Only one of the power settings — `hibernatemode 0` — actually fixes the slow
+login screen. Everything else in this repo is preference. So there are two sets:
+
+| | `--profile minimal` | `--profile full` (default) |
+| --- | --- | --- |
+| `hibernatemode 0`, sleep image, `powernap 0`, `sleep 10` | yes | yes |
+| `standby 0`, `autopoweroff 0`, `proximitywake 0` | **no** | yes |
+| UI responsiveness | **no** | yes |
+| Background processes / Siri | **no** | yes |
+| Text substitutions | **no** | yes |
+| Safe on a laptop | yes | see below |
+
+**If you are not sure, run `--profile minimal`.** It is the whole fix for the
+problem the README describes and nothing else, and it leaves Fast Sleep alone so
+it is safe on a MacBook. Once you have restarted and confirmed the login stall
+is gone, re-run with `--profile full` if you want the rest.
+
+`--undo` works identically after either profile.
 
 ### Add it to the Dock
 
@@ -153,11 +176,14 @@ skipped and the run continues.
 
 | Setting | Change to | What you lose |
 | --- | --- | --- |
-| Siri + `com.apple.Siri.agent` | disabled | Siri, and the Siri menu bar icon. |
+| `com.apple.assistant.support` → `Assistant Enabled` | `false` | Siri. |
+| `com.apple.Siri` → `StatusMenuVisible` | `false` | The Siri menu bar item. |
+| `com.apple.Siri` → `UserHasDeclinedEnable` | `true` | Stops macOS re-prompting you to turn Siri back on. |
+| `com.apple.Siri.agent` | disabled | The Siri agent itself. |
 | `com.apple.suggestd` | disabled | **Spotlight web/suggestion results.** Local app search still works. |
 | `com.apple.photoanalysisd` | disabled | Automatic "Photos" groupings and scene detection. Your library is untouched. |
 | `com.apple.iconservicesd` | disabled | Icon cache lookups. Can make newly created files show a generic icon until reboot. |
-| `CrashReporter DialogType` | `none` | Crash dialogs. Crashes are still logged to `/Library/Logs/DiagnosticReports`. |
+| `com.apple.CrashReporter` → `DialogType` | `none` | Crash dialogs. Crashes are still logged to `/Library/Logs/DiagnosticReports`. |
 
 ### Text substitutions
 
@@ -179,11 +205,11 @@ closed MacBook does not park its memory and power down — it keeps running with
 the lid shut, drawing real power.
 
 That means a MacBook in a backpack can be **flat battery by lunchtime**, and heat
-builds in a bag. If you run this on a laptop, either:
+builds in a bag. If you run the full profile on a laptop, either:
 
-- apply it, verify login is fixed, then undo the two power lines
-  (`--undo` puts everything back, or just `sudo pmset -a standby 1 autopoweroff 1`),
-- or edit the script and comment out those two `run` lines before running.
+- use `--profile minimal` instead, which leaves Fast Sleep alone entirely,
+- or apply it, verify login is fixed, then undo the two power lines
+  (`--undo` puts everything back, or just `sudo pmset -a standby 1 autopoweroff 1`).
 
 Everything else in the script is laptop-safe.
 
@@ -225,6 +251,7 @@ lines.
 | `macos-optimization.command` | The script. Everything else defers to it. |
 | `restore-defaults.command` | Thin wrapper that calls `macos-optimization.command --undo`. Exists so the undo is a separate double-clickable file. |
 | [`macos_optimization.md`](macos_optimization.md) | The original notes this script was written from, kept for reference. |
+| [`tests/run-tests.sh`](tests/run-tests.sh) | The test suite. Safe to run; it changes nothing. |
 | `LICENSE` | MIT. |
 
 ### About `macos_optimization.md`
@@ -251,10 +278,22 @@ neither replaces the other.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). In short: `--dry-run` must stay
-side-effect free, every new `defaults`/`pmset`/`launchctl` key needs a row in the
-README tables and an entry in `MANAGED_DEFAULTS`, and please open an issue with
-your macOS version and Mac model first — several keys are hardware-dependent.
+`./tests/run-tests.sh` runs the whole suite. It replaces `pmset`, `defaults`,
+`launchctl`, `sudo` and `killall` with stubs that record what they were asked to
+do, and points the backup at a temp directory — so the full apply → undo round
+trip runs for real, safely, on any machine including CI. Nothing it does can
+change your settings.
+
+```bash
+./tests/run-tests.sh          # everything
+./tests/run-tests.sh undo     # only tests matching "undo"
+```
+
+The same suite runs on every push and pull request. It also checks the README
+against the script, so a new setting that is not documented fails the build.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the invariants a change must not
+break.
 
 ## License
 

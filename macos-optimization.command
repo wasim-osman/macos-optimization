@@ -4,21 +4,23 @@
 # https://github.com/wasim-osman/macos-optimization
 #
 # Double-click to run, or:
-#   ./macos-optimization.command              apply the optimization
-#   ./macos-optimization.command --dry-run    print every change, change nothing
-#   ./macos-optimization.command --undo       restore the state saved before the first run
+#   ./macos-optimization.command                     apply the full profile
+#   ./macos-optimization.command --profile minimal   only the login-hang fix
+#   ./macos-optimization.command --dry-run           print every change, change nothing
+#   ./macos-optimization.command --undo              restore the state saved before the first run
 #
 # Sudo password will be required.
 
 set -uo pipefail
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 STATE_DIR="${MACOS_OPT_STATE_DIR:-$HOME/Library/Application Support/macos-optimization}"
 STATE_FILE="$STATE_DIR/state.tsv"
 FAILURES=0
 DRY_RUN=0
 ASSUME_YES=0
 UNDO=0
+PROFILE="full"
 
 # ---------------------------------------------------------------------------
 # output helpers
@@ -45,6 +47,16 @@ USAGE
   macos-optimization.command [options]
 
 OPTIONS
+  --profile <minimal|full>
+                Which set of changes to make. Default: full.
+
+                  full     Everything: the login fix plus UI, background
+                           process and text substitution changes.
+                  minimal  Only the settings that address the slow login
+                           screen. Touches four power values and nothing
+                           else. Safe on a laptop, because it leaves Fast
+                           Sleep alone.
+
   --dry-run     Print every change that would be made, then exit. No sudo
                 prompt, nothing is modified. Safe to run on any machine.
   --undo        Restore the settings captured before the *first* apply run.
@@ -147,6 +159,10 @@ defaults_type_for() {
 }
 
 capture_state() {
+    # --dry-run must not touch the filesystem at all, not even to write a
+    # backup that will be thrown away.
+    (( DRY_RUN )) && return 0
+
     mkdir -p "$STATE_DIR"
 
     # The baseline must stay the state from *before* the first apply, or --undo
@@ -183,9 +199,19 @@ capture_state() {
     local domain state service
     for domain in "${MANAGED_DOMAINS[@]}"; do
         # print-disabled labels services by name, not by full domain path.
+        # The value has been spelled both "true"/"false" and "disabled"/"enabled"
+        # across macOS releases, so accept either rather than assuming one.
         service="${domain##*/}"
-        state=$(launchctl print-disabled "user/$UID" 2>/dev/null \
-                | awk -v d="$service" '$0 ~ "\"" d "\"" { print ($0 ~ /=>/) ? ($0 ~ /=> true/) ? "disabled" : "enabled" : "absent"; exit }')
+        state=$(launchctl print-disabled "user/$UID" 2>/dev/null | awk -v d="$service" '
+            index($0, "\"" d "\"") {
+                n = split($0, parts, "=>")
+                v = parts[2]
+                gsub(/^[ \t]+|[ \t]+$/, "", v)
+                if (v == "true" || v == "disabled")     print "disabled"
+                else if (v == "false" || v == "enabled") print "enabled"
+                else                                      print "absent"
+                exit
+            }')
         printf 'launchctl\t%s\t%s\n' "$domain" "${state:-absent}" >> "$STATE_FILE"
     done
 
@@ -196,35 +222,38 @@ capture_state() {
 # apply
 # ---------------------------------------------------------------------------
 
-apply() {
+apply_power() {
     head1 "Power settings (the main fix)"
 
     # Hibernation writes the whole of RAM to disk on sleep. On large-memory
     # machines that write is slow, and waking mid-write is what produces the
     # long, unresponsive stall at the login window.
-    if (( DRY_RUN )); then
-        run "Disable hibernation" sudo pmset -a hibernatemode 0
-    else
-        capture_state
-        run "Disable hibernation" sudo pmset -a hibernatemode 0
-    fi
+    capture_state
+    run "Disable hibernation" sudo pmset -a hibernatemode 0
 
     # Only present when hibernation is on, so this is usually a no-op.
     run "Remove sleep image" sudo rm -f /var/vm/sleepimage
-
-    # standby/autopoweroff are Fast Sleep. Disabling them means the machine
-    # keeps real power draw while idle instead of parking in S3.
-    run "Disable standby (Fast Sleep)" sudo pmset -a standby 0
-    run "Disable auto-power-off" sudo pmset -a autopoweroff 0
 
     # Power Nap schedules background work that wakes the machine on its own.
     run "Disable Power Nap" sudo pmset -a powernap 0
     run "Set sleep to 10 minutes" sudo pmset -a sleep 10
 
-    # Laptops with a proximity sensor only. Desktops reject this key, which is
-    # why run() tolerates a non-zero exit instead of aborting the script.
-    run "Disable proximity wake" sudo pmset -a proximitywake 0
+    # standby and autopoweroff are Fast Sleep. Turning them off means a laptop
+    # keeps drawing real power with the lid shut, so they are in the full
+    # profile only — the hibernation fix does not need them.
+    if [[ "$PROFILE" == "full" ]]; then
+        run "Disable standby (Fast Sleep)" sudo pmset -a standby 0
+        run "Disable auto-power-off" sudo pmset -a autopoweroff 0
 
+        # Laptops with a proximity sensor only. Desktops reject this key, which
+        # is why run() tolerates a non-zero exit instead of aborting the script.
+        run "Disable proximity wake" sudo pmset -a proximitywake 0
+    else
+        skip "standby 0 / autopoweroff 0 / proximitywake 0 (full profile only)"
+    fi
+}
+
+apply_ui() {
     head1 "UI responsiveness"
     run "Faster key repeat" defaults write NSGlobalDomain KeyRepeat -int 2
     run "Shorter initial key repeat delay" defaults write NSGlobalDomain InitialKeyRepeat -int 15
@@ -235,7 +264,9 @@ apply() {
     run "Disable Finder animations" defaults write com.apple.finder DisableAllAnimations -bool true
     run "Restart Dock" killall Dock
     run "Restart Finder" killall Finder
+}
 
+apply_background() {
     head1 "Background processes"
     run "Disable Siri" defaults write com.apple.assistant.support "Assistant Enabled" -bool false
     run "Hide Siri menu bar item" defaults write com.apple.Siri StatusMenuVisible -bool false
@@ -245,13 +276,28 @@ apply() {
     run "Disable photo analysis" launchctl disable "user/$UID/com.apple.photoanalysisd"
     run "Disable icon services" launchctl disable "user/$UID/com.apple.iconservicesd"
     run "Silence crash reporter dialogs" defaults write com.apple.CrashReporter DialogType -string none
+}
 
+apply_text() {
     head1 "Automatic text substitutions"
     run "Disable autocorrect" defaults write NSGlobalDomain NSAutomaticSpellingCorrectionEnabled -bool false
     run "Disable auto-capitalization" defaults write NSGlobalDomain NSAutomaticCapitalizationEnabled -bool false
     run "Disable smart dashes" defaults write NSGlobalDomain NSAutomaticDashSubstitutionEnabled -bool false
     run "Disable smart periods" defaults write NSGlobalDomain NSAutomaticPeriodSubstitutionEnabled -bool false
     run "Disable smart quotes" defaults write NSGlobalDomain NSAutomaticQuoteSubstitutionEnabled -bool false
+}
+
+apply() {
+    apply_power
+
+    if [[ "$PROFILE" == "full" ]]; then
+        apply_ui
+        apply_background
+        apply_text
+    else
+        head1 "UI, background processes and text substitutions"
+        skip "skipped — minimal profile. Re-run without --profile for these."
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -333,6 +379,21 @@ while [[ $# -gt 0 ]]; do
         --dry-run)  DRY_RUN=1 ;;
         --undo)     UNDO=1 ;;
         -y|--yes)   ASSUME_YES=1 ;;
+        --profile)
+            [[ $# -ge 2 ]] || die "--profile needs a value: minimal or full"
+            shift
+            case "$1" in
+                minimal|full) PROFILE="$1" ;;
+                *) die "Unknown profile: $1 (expected minimal or full)" ;;
+            esac
+            ;;
+        --profile=*)
+            PROFILE="${1#--profile=}"
+            case "$PROFILE" in
+                minimal|full) ;;
+                *) die "Unknown profile: $PROFILE (expected minimal or full)" ;;
+            esac
+            ;;
         -h|--help)  usage; exit 0 ;;
         *)          die "Unknown option: $1 (try --help)" ;;
     esac
@@ -348,7 +409,6 @@ say ""
 say "macOS : $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
 say "Mac   : $(sysctl -n hw.model 2>/dev/null || echo unknown)"
 say ""
-
 if (( UNDO )); then
     if (( ! ASSUME_YES )); then
         say "This will restore the settings saved before the first apply run."
@@ -373,7 +433,7 @@ if (( UNDO )); then
         run "Restart Finder" killall Finder
     fi
 elif (( DRY_RUN )); then
-    say "Dry run — nothing will be changed."
+    say "Dry run — nothing will be changed. Profile: $PROFILE"
     say ""
     apply
     say ""
@@ -382,14 +442,31 @@ elif (( DRY_RUN )); then
     say "==============================================="
     exit 0
 else
-    say "This will:"
-    say "  - Disable hibernation, standby, autopoweroff, Power Nap"
-    say "  - Set sleep to 10 minutes"
-    say "  - Speed up UI (key repeat, Dock, Finder animations)"
-    say "  - Disable Siri, background daemons, text substitutions"
+    if [[ "$PROFILE" == "minimal" ]]; then
+        say "Profile: minimal"
+        say ""
+        say "This will change four power settings only:"
+        say "  - Disable hibernation and remove the sleep image"
+        say "  - Disable Power Nap"
+        say "  - Set sleep to 10 minutes"
+        say ""
+        say "Fast Sleep, the UI tweaks, Siri and the text substitutions"
+        say "are all left alone. Safe to run on a laptop."
+        say ""
+    else
+        say "Profile: full"
+        say ""
+        say "This will:"
+        say "  - Disable hibernation, standby, autopoweroff, Power Nap"
+        say "  - Set sleep to 10 minutes"
+        say "  - Speed up UI (key repeat, Dock, Finder animations)"
+        say "  - Disable Siri, background daemons, text substitutions"
+        say ""
+        say "On a laptop this disables Fast Sleep, so expect higher idle"
+        say "battery use. Prefer --profile minimal on a laptop."
+    fi
     say ""
-    say "On a laptop this disables Fast Sleep, so expect higher idle"
-    say "battery use. Undo at any time with:  $0 --undo"
+    say "Undo at any time with:  $0 --undo"
     say ""
     if (( ! ASSUME_YES )); then
         read -r -p "Continue? [y/N] " confirm
@@ -413,4 +490,13 @@ say "  1. Restart your Mac"
 say "  2. Test login — the unresponsiveness should be gone"
 say "  3. Undo with: $0 --undo"
 say ""
-read -r -p "Press Enter to close..." _
+
+# Only pause when a person is actually watching. With stdin closed or piped
+# (a test, a CI run, `./script -y < /dev/null`) read would return 1 and, as the
+# last command in the file, that became the script's exit status — so a fully
+# successful run reported failure.
+if [[ -t 0 ]]; then
+    read -r -p "Press Enter to close..." _
+fi
+
+exit 0

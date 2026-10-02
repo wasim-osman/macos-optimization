@@ -1,0 +1,54 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    name: test suite (macOS ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The script targets /bin/bash 3.2, which is what a Mac actually runs, so
+        # the suite runs on real macOS rather than Linux with a newer bash.
+        os: [macos-15, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report shell version
+        run: |
+          echo "bash: $(/bin/bash --version | head -1)"
+          echo "macOS: $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+
+      - name: Run test suite
+        run: ./tests/run-tests.sh
+
+  shellcheck:
+    name: shellcheck (advisory)
+    runs-on: macos-15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: brew install shellcheck
+
+      - name: Lint
+        # Advisory for now: reports findings without blocking a merge. Promote
+        # to a required check once the warnings are cleared.
+        run: shellcheck --severity=warning --external-sources \
+             macos-optimization.command \
+             restore-defaults.command \
+             tests/run-tests.sh \
+             tests/helpers/stub-env.sh
