@@ -578,6 +578,14 @@ elif (( DRY_RUN )); then
         say "$(describe_fast_sleep) — you will be asked whether to change it."
     fi
     say ""
+    # Honour an explicit MACOS_OPT_FAST_SLEEP before previewing, or the preview
+    # describes a different run from the one that would actually happen. This
+    # returns immediately for a dry run, so nothing is ever prompted for here.
+    ask_fast_sleep
+    if [[ "$FAST_SLEEP_CHOICE" != "profile" ]]; then
+        say "${DIM}Fast Sleep answer: $FAST_SLEEP_CHOICE${RESET}"
+        say ""
+    fi
     apply
     say ""
     say "==============================================="

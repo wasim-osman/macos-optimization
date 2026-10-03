@@ -426,6 +426,28 @@ run_script --dry-run
 assert_contains "$OUT" "Fast Sleep is currently OFF" "should report off"
 end_test
 
+test_case "a dry run must preview the answer, not the profile default"
+sandbox_new fsdryans > /dev/null
+# A preview that disagrees with the run it previews is worse than no preview,
+# so the override has to be applied before apply() is called in dry-run mode.
+run_script_fs on --dry-run --profile full
+assert_contains "$OUT" "pmset -a standby 1" "preview should enable standby"
+assert_not_contains "$OUT" "pmset -a standby 0" "preview must not show the profile default"
+end_test
+
+test_case "a dry run with keep shows the profile default"
+sandbox_new fsdrykeep > /dev/null
+run_script_fs keep --dry-run --profile full
+assert_contains "$OUT" "pmset -a standby 0" "keep should preview the full profile"
+assert_not_contains "$OUT" "Fast Sleep answer:" "an unanswered preview should not claim an answer"
+end_test
+
+test_case "a dry run with no override says nothing about an answer"
+sandbox_new fsdrynone > /dev/null
+run_script --dry-run --profile full
+assert_not_contains "$OUT" "Fast Sleep answer:" "no answer was given"
+end_test
+
 test_case "undo restores the Fast Sleep value captured at apply time"
 sandbox_new fsundo > /dev/null
 run_script_fs off -y --profile full
