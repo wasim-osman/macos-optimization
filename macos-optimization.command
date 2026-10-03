@@ -13,7 +13,7 @@
 
 set -uo pipefail
 
-VERSION="2.1.0"
+VERSION="2.2.0"
 STATE_DIR="${MACOS_OPT_STATE_DIR:-$HOME/Library/Application Support/macos-optimization}"
 STATE_FILE="$STATE_DIR/state.tsv"
 FAILURES=0
