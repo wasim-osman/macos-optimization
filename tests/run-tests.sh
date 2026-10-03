@@ -139,7 +139,7 @@ log_lacks() { ! grep -qF -- "$1" "$STUB_CALL_LOG"; }
 ORIGINAL_PATH="$PATH"
 
 printf '\n%s%s test suite %s\n' "$B" "macos-optimization" "$N"
-printf '%ssandbox: %s\n\n' "$D" "$WORK" "$N"
+printf '%ssandbox: %s%s\n\n' "$D" "$WORK" "$N"
 
 # ---------------------------------------------------------------------------
 # 1. syntax and CLI contract
