@@ -35,10 +35,19 @@ STUB
 
     cat > "$STUB_DIR/pmset" <<'STUB'
 #!/bin/bash
-# `pmset -g` is a read: answer it from the fixture so the test controls what the
-# script believes the current power settings are. Reached only when pmset is
-# called directly, which the script does not do for writes.
+# `pmset -g` and `pmset -g batt` are reads: answer them from the fixtures so the
+# test controls what the script believes the current power settings are. Reached
+# only when pmset is called directly, which the script does not do for writes.
 if [[ "$1" == "-g" ]]; then
+    if [[ "$2" == "batt" ]]; then
+        if [[ -f "$STUB_FIXTURES/battery.txt" ]]; then
+            cat "$STUB_FIXTURES/battery.txt"
+        else
+            printf "Now drawing from 'AC Power'\n"
+            printf " -InternalBattery-0 (id=0)\t100%%; AC attached\n"
+        fi
+        exit 0
+    fi
     cat "$STUB_FIXTURES/pmset.txt"
     exit 0
 fi

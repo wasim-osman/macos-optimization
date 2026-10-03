@@ -64,6 +64,20 @@ OPTIONS
   -y, --yes     Do not prompt for confirmation.
   -h, --help    Show this help.
 
+FAST SLEEP
+  On a laptop the script asks whether to turn Fast Sleep on or off, showing
+  what it currently is. Press Enter, or choose 3, to leave it as it is. The
+  profile only decides this when you are not asked, so:
+
+    full     Fast Sleep is turned OFF (the lid does not sleep the Mac)
+    minimal  Fast Sleep is left alone
+
+  To answer without a prompt, for a script or an unattended run:
+
+    MACOS_OPT_FAST_SLEEP=on    turn Fast Sleep on
+    MACOS_OPT_FAST_SLEEP=off   turn Fast Sleep off
+    MACOS_OPT_FAST_SLEEP=keep  follow the profile
+
 NOTES
   * An administrator account is required: the power settings use sudo.
   * No Full Disk Access, Accessibility or Automation permission is needed.
@@ -103,6 +117,110 @@ run() {
         warn "$desc — skipped"
         printf '             %s%s%s\n' "$DIM" "$output" "$RESET"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# Fast Sleep state
+# ---------------------------------------------------------------------------
+#
+# Fast Sleep (S3) is what "standby 0" switches off. Whether to change it is the
+# one genuinely two-sided decision in this script: a desktop does not care, and
+# a laptop that closes its lid should either go to sleep or carry on running.
+# So it is worth asking rather than deciding from the profile alone.
+#
+# Three answers, not two. `pmset -g` reports standby on Apple silicon, but Intel
+# Macs report standbydelayhigh instead and print no standby at all, so "cannot
+# tell" is a real state that has to survive to the user rather than being
+# guessed at.
+
+FAST_SLEEP_CHOICE="profile"   # profile | on | off
+
+# fast_sleep_state -> on | off | unknown
+fast_sleep_state() {
+    local v
+    v=$(pmset -g 2>/dev/null | awk '$1 == "standby" { print $2; exit }')
+    case "$v" in
+        0) printf 'off' ;;
+        1) printf 'on' ;;
+        *) printf 'unknown' ;;
+    esac
+}
+
+# is_laptop -> 0 if this Mac has a battery, 1 otherwise. Fast Sleep is only
+# meaningful with one, so desktops do not get asked about it.
+is_laptop() {
+    pmset -g batt 2>/dev/null | grep -q 'InternalBattery'
+}
+
+describe_fast_sleep() {
+    case "$(fast_sleep_state)" in
+        on)  printf 'Fast Sleep is currently ON' ;;
+        off) printf 'Fast Sleep is currently OFF' ;;
+        *)   printf 'Fast Sleep state cannot be read on this Mac' ;;
+    esac
+}
+
+# ask_fast_sleep -> sets FAST_SLEEP_CHOICE. Silently keeps the profile default
+# when there is no one to ask: -y, --dry-run, a piped stdin, or a desktop.
+ask_fast_sleep() {
+    # An explicit answer in the environment wins over both the profile and the
+    # prompt. This is how the prompt is tested without a terminal, and how a
+    # user scripts the same decision for an unattended run.
+    if [[ -n "${MACOS_OPT_FAST_SLEEP:-}" ]]; then
+        case "$MACOS_OPT_FAST_SLEEP" in
+            on|ON|1)     FAST_SLEEP_CHOICE="on" ;;
+            off|OFF|0)   FAST_SLEEP_CHOICE="off" ;;
+            keep|KEEP)   FAST_SLEEP_CHOICE="profile" ;;
+            *) die "MACOS_OPT_FAST_SLEEP must be on, off or keep (got '$MACOS_OPT_FAST_SLEEP')" ;;
+        esac
+        return 0
+    fi
+
+    (( DRY_RUN || ASSUME_YES )) && return 0
+    [[ -t 0 ]] || return 0
+    is_laptop || return 0
+
+    local state answer
+    state=$(fast_sleep_state)
+
+    say ""
+    say "${YELLOW}$(describe_fast_sleep)${RESET}"
+    case "$state" in
+        off)
+            say "  Turning it on means the Mac sleeps properly when the lid is"
+            say "  shut, using more battery. Turning it off keeps the Mac"
+            say "  running with the lid shut, which is faster but flatter."
+            ;;
+        on)
+            say "  Turning it off makes the Mac run with the lid shut instead"
+            say "  of sleeping, which is what fixes slow wakes on some Macs."
+            ;;
+        *)
+            warn "this Mac does not report the current value, so the choice"
+            warn "below is applied blind. Either answer is reversible."
+            ;;
+    esac
+    say ""
+    say "  [1] Turn Fast Sleep ON"
+    say "  [2] Turn Fast Sleep OFF"
+    say "  [3] Leave it as it is"
+    say ""
+
+    # Default to leaving it alone. Pressing enter should never change power
+    # settings on a laptop by accident.
+    read -r -p "  Choice [3]: " answer
+    case "$answer" in
+        1|on|ON)  FAST_SLEEP_CHOICE="on" ;;
+        2|off|OFF) FAST_SLEEP_CHOICE="off" ;;
+        *)         FAST_SLEEP_CHOICE="profile" ;;
+    esac
+
+    case "$FAST_SLEEP_CHOICE" in
+        on)  say "  Fast Sleep will be turned ON" ;;
+        off) say "  Fast Sleep will be turned OFF" ;;
+        *)   say "  Fast Sleep will be left alone" ;;
+    esac
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -243,15 +361,35 @@ apply_power() {
     # standby and autopoweroff are Fast Sleep. Turning them off means a laptop
     # keeps drawing real power with the lid shut, so they are in the full
     # profile only — the hibernation fix does not need them.
-    if [[ "$PROFILE" == "full" ]]; then
-        run "Disable standby (Fast Sleep)" sudo pmset -a standby 0
-        run "Disable auto-power-off" sudo pmset -a autopoweroff 0
+    #
+    # An explicit answer from ask_fast_sleep overrides the profile. That is the
+    # point of asking: on a laptop the user knows whether they want the lid to
+    # put the Mac to sleep, and the profile cannot know that.
+    local want_fast_sleep="profile"
+    [[ "$PROFILE" == "full" ]] && want_fast_sleep="off"
+    [[ "$FAST_SLEEP_CHOICE" != "profile" ]] && want_fast_sleep="$FAST_SLEEP_CHOICE"
 
-        # Laptops with a proximity sensor only. Desktops reject this key, which
-        # is why run() tolerates a non-zero exit instead of aborting the script.
+    case "$want_fast_sleep" in
+        on)
+            run "Enable standby (Fast Sleep)" sudo pmset -a standby 1
+            run "Enable auto-power-off" sudo pmset -a autopoweroff 1
+            ;;
+        off)
+            run "Disable standby (Fast Sleep)" sudo pmset -a standby 0
+            run "Disable auto-power-off" sudo pmset -a autopoweroff 0
+            ;;
+        *)
+            skip "standby 0 / autopoweroff 0 (Fast Sleep left alone)"
+            ;;
+    esac
+
+    # Laptops with a proximity sensor only. Desktops reject this key, which is
+    # why run() tolerates a non-zero exit instead of aborting the script.
+    # Independent of Fast Sleep: it controls waking on approach, not sleeping.
+    if [[ "$PROFILE" == "full" ]]; then
         run "Disable proximity wake" sudo pmset -a proximitywake 0
     else
-        skip "standby 0 / autopoweroff 0 / proximitywake 0 (full profile only)"
+        skip "proximitywake 0 (full profile only)"
     fi
 }
 
@@ -436,6 +574,9 @@ if (( UNDO )); then
     fi
 elif (( DRY_RUN )); then
     say "Dry run — nothing will be changed. Profile: $PROFILE"
+    if is_laptop; then
+        say "$(describe_fast_sleep) — you will be asked whether to change it."
+    fi
     say ""
     apply
     say ""
@@ -470,6 +611,7 @@ else
     say ""
     say "Undo at any time with:  $0 --undo"
     say ""
+    ask_fast_sleep
     if (( ! ASSUME_YES )); then
         read -r -p "Continue? [y/N] " confirm
         [[ "$confirm" == "y" || "$confirm" == "Y" ]] || { say "Aborted."; exit 0; }

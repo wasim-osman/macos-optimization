@@ -133,6 +133,17 @@ run_script() {
     return 0
 }
 
+# run_script_fs <on|off|keep> <args...> — answer the Fast Sleep question without
+# a terminal. Assigning in front of a function call leaks in bash, so this
+# exports and clears explicitly instead.
+run_script_fs() {
+    local choice="$1"; shift
+    MACOS_OPT_FAST_SLEEP="$choice"
+    export MACOS_OPT_FAST_SLEEP
+    run_script "$@"
+    unset MACOS_OPT_FAST_SLEEP
+}
+
 log_has()   { grep -qF -- "$1" "$STUB_CALL_LOG"; }
 log_lacks() { ! grep -qF -- "$1" "$STUB_CALL_LOG"; }
 
@@ -310,6 +321,120 @@ run_script -y
 log_has "pmset -a standby 0" || fail "full should disable standby"
 log_has "pmset -a autopoweroff 0" || fail "full should disable autopoweroff"
 end_test
+fi
+
+# ---------------------------------------------------------------------------
+# 3b. Fast Sleep can be answered either way
+# ---------------------------------------------------------------------------
+#
+# The interactive prompt cannot be driven here: run_script sends stdin from
+# /dev/null, so ask_fast_sleep deliberately keeps the profile default. The
+# MACOS_OPT_FAST_SLEEP override is the same code path the prompt ends up
+# setting, so these tests cover the decision and its effect, and the prompt
+# itself is covered by checking it stays silent when nobody can answer it.
+
+if [[ -z "$FILTER" || "$FILTER" == "fastsleep" ]]; then
+
+test_case "the prompt does not appear when stdin is not a terminal"
+sandbox_new fsquiet > /dev/null
+run_script -y
+assert_not_contains "$OUT" "Turn Fast Sleep ON" "a non-interactive run must not ask"
+end_test
+
+test_case "-y must not ask about Fast Sleep either"
+sandbox_new fsyes > /dev/null
+run_script -y
+assert_not_contains "$OUT" "Choice [3]" "--yes must not prompt"
+end_test
+
+test_case "MACOS_OPT_FAST_SLEEP=off turns Fast Sleep off"
+sandbox_new fsoff > /dev/null
+run_script_fs off -y --profile minimal
+log_has "pmset -a standby 0"     || fail "off should disable standby"
+log_has "pmset -a autopoweroff 0" || fail "off should disable autopoweroff"
+end_test
+
+test_case "MACOS_OPT_FAST_SLEEP=on turns Fast Sleep on"
+sandbox_new fson > /dev/null
+run_script_fs on -y --profile minimal
+log_has "pmset -a standby 1"      || fail "on should enable standby"
+log_has "pmset -a autopoweroff 1" || fail "on should enable autopoweroff"
+end_test
+
+test_case "MACOS_OPT_FAST_SLEEP=on beats the full profile"
+sandbox_new fsoverride > /dev/null
+run_script_fs on -y --profile full
+log_lacks "pmset -a standby 0" || fail "an explicit on must beat the profile"
+log_has  "pmset -a standby 1" || fail "an explicit on should enable standby"
+end_test
+
+test_case "MACOS_OPT_FAST_SLEEP=keep falls back to the profile"
+sandbox_new fskeep > /dev/null
+run_script_fs keep -y --profile full
+log_has "pmset -a standby 0" || fail "keep should follow the full profile"
+end_test
+
+test_case "MACOS_OPT_FAST_SLEEP=keep under minimal leaves standby alone"
+sandbox_new fskeepmin > /dev/null
+run_script_fs keep -y --profile minimal
+log_lacks "pmset -a standby 0"     || fail "minimal must not disable standby"
+log_lacks "pmset -a standby 1"     || fail "minimal must not enable standby"
+log_lacks "pmset -a autopoweroff 0" || fail "minimal must not disable autopoweroff"
+end_test
+
+test_case "a bad MACOS_OPT_FAST_SLEEP value is rejected"
+sandbox_new fsbad > /dev/null
+run_script_fs maybe -y
+assert_exit 1 "$STATUS" "a bad value should exit 1"
+assert_contains "$OUT" "must be on, off or keep" "should explain the accepted values"
+end_test
+
+test_case "proximitywake stays profile-gated even when Fast Sleep is turned on"
+sandbox_new fsprox > /dev/null
+run_script_fs on -y --profile minimal
+log_lacks "pmset -a proximitywake 0" || fail "minimal must not touch proximitywake"
+end_test
+
+test_case "a desktop is never asked about Fast Sleep"
+sandbox_new fsdesktop > /dev/null
+printf "Now drawing from 'AC Power'\n" > "$SANDBOX/fixtures/battery.txt"
+run_script --dry-run
+assert_not_contains "$OUT" "Fast Sleep is currently" "a desktop has no Fast Sleep"
+end_test
+
+test_case "a laptop dry run reports the current Fast Sleep state"
+sandbox_new fsdry > /dev/null
+run_script --dry-run
+assert_contains "$OUT" "Fast Sleep is currently ON" "fixture has standby 1"
+end_test
+
+test_case "an unreadable standby is reported as unknown, not guessed"
+sandbox_new fsunknown > /dev/null
+# An Intel Mac reports standbydelayhigh and prints no standby at all.
+grep -v ' standby ' "$SANDBOX/fixtures/pmset.txt" > "$SANDBOX/fixtures/pmset2.txt"
+mv "$SANDBOX/fixtures/pmset2.txt" "$SANDBOX/fixtures/pmset.txt"
+run_script --dry-run
+assert_contains "$OUT" "cannot be read" "should say it cannot tell"
+assert_not_contains  "$OUT" "Fast Sleep is currently ON"  "must not guess on"
+assert_not_contains  "$OUT" "Fast Sleep is currently OFF" || fail "must not guess off"
+end_test
+
+test_case "Fast Sleep still reads correctly when standby is 0"
+sandbox_new fsoffstate > /dev/null
+sed -i '' 's/^ standby  *1$/ standby              0/' "$SANDBOX/fixtures/pmset.txt"
+run_script --dry-run
+assert_contains "$OUT" "Fast Sleep is currently OFF" "should report off"
+end_test
+
+test_case "undo restores the Fast Sleep value captured at apply time"
+sandbox_new fsundo > /dev/null
+run_script_fs off -y --profile full
+assert_contains "$(cat "$MACOS_OPT_STATE_DIR/state.tsv")" "power	-a standby	1" \
+    "baseline should record standby 1 before it is changed"
+run_script -y --undo
+log_has "pmset -a standby 1" || fail "undo should put standby back to 1"
+end_test
+
 fi
 
 # ---------------------------------------------------------------------------

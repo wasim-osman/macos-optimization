@@ -112,7 +112,8 @@ login screen. Everything else in this repo is preference. So there are two sets:
 | | `--profile minimal` | `--profile full` (default) |
 | --- | --- | --- |
 | `hibernatemode 0`, sleep image, `powernap 0`, `sleep 10` | yes | yes |
-| `standby 0`, `autopoweroff 0`, `proximitywake 0` | **no** | yes |
+| `standby`, `autopoweroff` (Fast Sleep) | **no** | yes — unless you are asked, see below |
+| `proximitywake 0` | **no** | yes |
 | UI responsiveness | **no** | yes |
 | Background processes / Siri | **no** | yes |
 | Text substitutions | **no** | yes |
@@ -124,6 +125,41 @@ it is safe on a MacBook. Once you have restarted and confirmed the login stall
 is gone, re-run with `--profile full` if you want the rest.
 
 `--undo` works identically after either profile.
+
+### Fast Sleep: the script asks you
+
+On a laptop, Fast Sleep is the one setting where "optimised" and "correct" point
+in opposite directions. A Mac that never sleeps is fast; a Mac that sleeps
+properly is not flat in your bag by lunchtime. No profile can decide that for
+you, so on a laptop the script stops and asks:
+
+```
+Fast Sleep is currently OFF
+  Turning it on means the Mac sleeps properly when the lid is
+  shut, using more battery. Turning it off keeps the Mac
+  running with the lid shut, which is faster but flatter.
+
+  [1] Turn Fast Sleep ON
+  [2] Turn Fast Sleep OFF
+  [3] Leave it as it is
+
+  Choice [3]:
+```
+
+Whatever you pick beats the profile. Choose **3** or just press Enter to leave
+Fast Sleep exactly as it is — that is the safe default.
+
+On a **desktop** you are not asked, because the question does not apply. On an
+older Intel Mac that does not report the current value, the script says it cannot
+tell rather than guessing.
+
+To answer without a prompt — a script, or any unattended run:
+
+| `MACOS_OPT_FAST_SLEEP` | Effect |
+| --- | --- |
+| `on` | turn Fast Sleep on |
+| `off` | turn Fast Sleep off |
+| `keep` | follow the profile, change nothing |
 
 ### Add it to the Dock
 
@@ -205,11 +241,17 @@ closed MacBook does not park its memory and power down — it keeps running with
 the lid shut, drawing real power.
 
 That means a MacBook in a backpack can be **flat battery by lunchtime**, and heat
-builds in a bag. If you run the full profile on a laptop, either:
+builds in a bag. So on a laptop the script **asks** whether you want Fast Sleep
+turned off, and shows you its current state — see
+[Fast Sleep: the script asks you](#fast-sleep-the-script-asks-you). Answer **3**
+to leave it alone and get the login fix without the battery cost.
 
-- use `--profile minimal` instead, which leaves Fast Sleep alone entirely,
-- or apply it, verify login is fixed, then undo the two power lines
-  (`--undo` puts everything back, or just `sudo pmset -a standby 1 autopoweroff 1`).
+If you skip the prompt with `-y`, use `--profile minimal`, or want to be
+explicit, answer it yourself:
+
+```bash
+MACOS_OPT_FAST_SLEEP=keep ./macos-optimization.command -y
+```
 
 Everything else in the script is laptop-safe.
 
@@ -234,6 +276,22 @@ If the backup file is missing, `--undo` falls back to the documented macOS
 defaults (`hibernatemode 3`, `standby 1`, `autopoweroff 1`, `powernap 1`,
 `sleep 1`, `proximitywake 1`) and deletes the `defaults` keys, which returns them
 to their factory state.
+
+### What undo cannot restore
+
+Two keys are one-way, and it is worth being straight about it:
+
+| Key | Why |
+| --- | --- |
+| `autopoweroff` | macOS does not report the current value, so there is nothing to put back. After an undo it stays `0`. |
+| `proximitywake` | Same, and most Macs have no proximity sensor to begin with. |
+
+`standby` **is** restored, because macOS does report it. If you want
+`autopoweroff` back after an undo, set it yourself:
+
+```bash
+sudo pmset -a autopoweroff 1
+```
 
 ### Note on macOS re-enabling services
 
