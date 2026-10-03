@@ -39,9 +39,8 @@ jobs:
         run: ./tests/run-tests.sh
 
   shellcheck:
-    name: shellcheck (advisory)
+    name: shellcheck
     runs-on: macos-15
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
 
@@ -49,8 +48,8 @@ jobs:
         run: brew install shellcheck
 
       - name: Lint
-        # Advisory for now: reports findings without blocking a merge. Promote
-        # to a required check once the warnings are cleared.
+        # Required as of v2.1.0. It was advisory while the first findings were
+        # triaged; it is clean now, so it blocks.
         #
         # The block scalar matters. Written as a folded plain scalar, YAML joins
         # these lines with spaces and the backslashes survive as literal

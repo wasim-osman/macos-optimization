@@ -25,9 +25,9 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/macopt-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 if [[ -t 1 ]]; then
-    G=$'\033[32m'; R=$'\033[31m'; Y=$'\033[33m'; D=$'\033[2m'; B=$'\033[1m'; N=$'\033[0m'
+    G=$'\033[32m'; R=$'\033[31m'; D=$'\033[2m'; B=$'\033[1m'; N=$'\033[0m'
 else
-    G=''; R=''; Y=''; D=''; B=''; N=''
+    G=''; R=''; D=''; B=''; N=''
 fi
 
 TESTS_RUN=0
@@ -139,7 +139,7 @@ log_lacks() { ! grep -qF -- "$1" "$STUB_CALL_LOG"; }
 ORIGINAL_PATH="$PATH"
 
 printf '\n%s%s test suite %s\n' "$B" "macos-optimization" "$N"
-printf '%s%s\n\n' "$D" "sandbox: $WORK" "$N"
+printf '%ssandbox: %s\n\n' "$D" "$WORK" "$N"
 
 # ---------------------------------------------------------------------------
 # 1. syntax and CLI contract
@@ -625,7 +625,7 @@ README="$REPO_ROOT/README.md"
 # Pull the managed list out of the script itself so this cannot drift.
 sed -n '/^MANAGED_DEFAULTS=(/,/^)/p' "$SCRIPT" \
     | sed -n 's/^[[:space:]]*"\([^"]*\)".*/\1/p' \
-    | while IFS='|' read -r domain key type; do
+    | while IFS='|' read -r domain key _; do
         if ! grep -qF "$key" "$README"; then
             printf 'MISSING %s %s\n' "$domain" "$key"
         fi

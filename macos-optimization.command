@@ -169,7 +169,9 @@ capture_state() {
     # would only ever restore the already-optimized values. Later runs get
     # their own timestamped snapshot instead of overwriting the baseline.
     if [[ -f "$STATE_FILE" ]]; then
-        local extra="$STATE_DIR/state-$(date +%Y%m%d-%H%M%S).tsv"
+        local stamp extra
+        stamp=$(date +%Y%m%d-%H%M%S)
+        extra="$STATE_DIR/state-$stamp.tsv"
         STATE_FILE="$extra"
         warn "Baseline backup already exists — writing this run's snapshot to"
         warn "  $(basename "$extra")"
